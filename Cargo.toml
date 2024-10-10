@@ -1,0 +1,16 @@
+[package]
+name = "hawthorne"
+version = "0.1.0"
+edition = "2021"
+
+[profile.dev]
+opt-level = 3
+
+[dependencies]
+tinyvec = { version = "1.8.0", features = ["rustc_1_55", "std"] }
+atomic_float = "1.1.0"
+fastrand = "2.1.1"
+rustc-hash = "2.0.0"
+dashmap = { version = "6.1.0", features = ["rayon"] }
+thread_local = "1.1.8"
+rayon = "1.10.0"
