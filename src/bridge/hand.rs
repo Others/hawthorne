@@ -1,5 +1,5 @@
-use std::fmt::{Display, Formatter};
 use crate::bridge::card::{Card, Suit, ALL_RANKS, ALL_SUITS};
+use std::fmt::{Display, Formatter};
 use std::ops::{Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Sub, SubAssign};
 use std::sync::LazyLock;
 use tinyvec::{array_vec, ArrayVec};
@@ -38,8 +38,20 @@ impl Hand {
         self.bitset == 0
     }
 
+    #[inline]
     pub fn contains(&self, card: Card) -> bool {
         (self.bitset & (1 << (card.n as u64))) > 0
+    }
+
+    #[inline]
+    pub fn run_for_cards(&self, mut f: impl FnMut(Card)) {
+        for i in 0u8..52 {
+            let card = Card { n: i };
+
+            if self.contains(card) {
+                f(card)
+            }
+        }
     }
 
     pub fn cards(&self) -> ArrayVec<[Card; 52]> {
@@ -76,7 +88,6 @@ impl Display for Hand {
         f.write_fmt(format_args!("{}", self.cards()))
     }
 }
-
 
 impl AddAssign<Card> for Hand {
     fn add_assign(&mut self, rhs: Card) {
@@ -158,7 +169,7 @@ impl BitOr<Hand> for Hand {
 
     fn bitor(self, rhs: Hand) -> Self::Output {
         let mut res = self.clone();
-        res &= rhs;
+        res |= rhs;
 
         res
     }

@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::LazyLock;
 
 pub const SUITS: u8 = 4;
@@ -162,7 +162,7 @@ impl Display for Card {
             Suit::Clubs => "C",
             Suit::Diamonds => "D",
             Suit::Hearts => "H",
-            Suit::Spades => "S"
+            Suit::Spades => "S",
         };
 
         f.write_fmt(format_args!("{}{}", rank, suit))?;

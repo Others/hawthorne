@@ -1,7 +1,5 @@
-mod strategy;
 mod utility;
 
-pub use strategy::*;
 pub use utility::*;
 
 use atomic_float::AtomicF64;
@@ -14,7 +12,7 @@ pub type PlayerNumber = usize;
 pub type Probability = f64;
 pub type AtomicProbability = AtomicF64;
 
-pub trait OracleGamestate<INFO: VisibleInfo>: Clone + Debug + Send + Sync {
+pub trait OracleGamestate<INFO: VisibleInfo>: Clone + Debug + Sized + Send + Sync {
     fn info_for_turn_player(&self) -> INFO;
 
     fn turn(&self) -> PlayerNumber;
@@ -22,8 +20,8 @@ pub trait OracleGamestate<INFO: VisibleInfo>: Clone + Debug + Send + Sync {
     fn advance(&self, m: &INFO::Move) -> Self;
 }
 
-pub trait VisibleInfo: Hash + Eq + Clone + Debug + Send + Sync {
-    type Move: Hash + Eq + Clone + Debug + Send + Sync;
+pub trait VisibleInfo: Hash + Eq + Debug + Sized + Send + Sync {
+    type Move: Hash + Eq + Clone + Copy + Debug + Send + Sync;
 
     type Gamestate: OracleGamestate<Self>;
 
@@ -31,7 +29,7 @@ pub trait VisibleInfo: Hash + Eq + Clone + Debug + Send + Sync {
 
     fn turn(&self) -> PlayerNumber;
 
-    fn moves(&self) -> Moves<Self::Move>;
+    fn run_for_moves(&self, f: impl FnMut(Self::Move)) -> Option<UtilityForAllPlayers>;
 
     fn get_all_possible_gamestates(
         &self,
@@ -88,14 +86,4 @@ impl<SAMPLER: GamestateSampler> Iterator for RandomGamestateIterator<SAMPLER> {
 
         Some((g, p))
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum Moves<T> {
-    // TODO: We definitely shouldn't use a vec here
-    PossibleMoves(Vec<T>),
-    Terminal {
-        // Indexed by the player number
-        utility: UtilityForAllPlayers,
-    },
 }

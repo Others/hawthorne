@@ -1,10 +1,9 @@
 use crate::cfr::game_model::{
-    GamestateSampler, Moves, OracleGamestate, PlayerNumber, Probability, UtilityForAllPlayers,
+    GamestateSampler, OracleGamestate, PlayerNumber, Probability, UtilityForAllPlayers,
     VisibleInfo,
 };
 use std::fmt::{Display, Formatter};
 use std::sync::LazyLock;
-use tinyvec::tiny_vec;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TicTacToeBoard {
@@ -42,6 +41,38 @@ impl TicTacToeBoard {
         }
 
         None
+    }
+
+    fn moves(&self) -> Vec<TicTacToeMove> {
+        match self.winner() {
+            Some(_) => {
+                return Vec::new()
+            }
+            None => {}
+        }
+
+        let square = match self.turn {
+            Player::X => TicTacToeSquare::X,
+            Player::O => TicTacToeSquare::O,
+        };
+
+        let moves: Vec<TicTacToeMove> = self
+            .squares
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, v)| {
+                if *v == TicTacToeSquare::Empty {
+                    Some(TicTacToeMove {
+                        square: idx,
+                        state: square,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        moves
     }
 }
 
@@ -104,21 +135,17 @@ impl VisibleInfo for TicTacToeBoard {
         OracleGamestate::turn(self)
     }
 
-    fn moves(&self) -> Moves<Self::Move> {
+    fn run_for_moves(&self, mut f: impl FnMut(Self::Move)) -> Option<UtilityForAllPlayers> {
         match self.winner() {
             Some(Player::X) => {
-                return Moves::Terminal {
-                    utility: UtilityForAllPlayers {
-                        util: tiny_vec![1.0, 0.0],
-                    },
-                }
+                return Some(UtilityForAllPlayers {
+                    util: [1.0, 0.0, 0.0, 0.0],
+                })
             }
             Some(Player::O) => {
-                return Moves::Terminal {
-                    utility: UtilityForAllPlayers {
-                        util: tiny_vec![0.0, 1.0],
-                    },
-                }
+                return Some(UtilityForAllPlayers {
+                    util: [0.0, 1.0, 0.0, 0.0],
+                })
             }
             None => {}
         }
@@ -146,14 +173,14 @@ impl VisibleInfo for TicTacToeBoard {
 
         if moves.is_empty() {
             // Stalemate
-            return Moves::Terminal {
-                utility: UtilityForAllPlayers {
-                    util: tiny_vec![0.5, 0.5],
-                },
-            };
+            return Some(UtilityForAllPlayers {
+                util: [0.5, 0.5, 0.0, 0.0],
+            });
         }
 
-        Moves::PossibleMoves(moves)
+        moves.iter().for_each(|x| f(*x));
+
+        None
     }
 
     fn get_all_possible_gamestates(&self) -> impl Iterator<Item = (Self::Gamestate, Probability)> {
@@ -228,7 +255,7 @@ mod test {
 
     #[test]
     fn play_a_game() {
-        let strategy = generate_strategy_2(TicTacToeBoard::default(), 100);
+        let strategy = generate_strategy_2(TicTacToeBoard::default(), 1);
 
         // for (k, v) in &strategy.probability {
         //     println!("{}", k);
@@ -237,12 +264,12 @@ mod test {
 
         let mut board = TicTacToeBoard::default();
         println!("{}", board);
-        println!("{:?}", strategy.get_move_probabilities(&board));
+        println!("{:?}", strategy.get_move_probabilities(board.clone()));
 
-        while let Some(m) = strategy.pick_move(&board) {
+        while let Some(m) = strategy.pick_move(board.clone()) {
             board = board.advance(&m);
             println!("{}", board);
-            println!("{:?}", strategy.get_move_probabilities(&board));
+            println!("{:?}", strategy.get_move_probabilities(board.clone()));
         }
     }
 }

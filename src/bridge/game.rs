@@ -1,13 +1,13 @@
-use std::hash::{Hash, Hasher};
 use crate::bridge::card::{Card, ALL_CARDS};
 use crate::bridge::contract::Contract;
-use crate::bridge::hand::{Hand, FULL_HAND};
+use crate::bridge::hand::Hand;
 use crate::bridge::seat::Seat;
 use crate::cfr::game_model::{
-    GamestateSampler, Moves, OracleGamestate, PlayerNumber, Probability, Utility,
+    GamestateSampler, OracleGamestate, PlayerNumber, Probability, Utility,
     UtilityForAllPlayers, VisibleInfo,
 };
-use tinyvec::{tiny_vec, ArrayVec};
+use std::hash::Hash;
+use tinyvec::ArrayVec;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct BridgeGame {
@@ -15,6 +15,7 @@ pub struct BridgeGame {
 
     declarer_tricks: u8,
     defender_tricks: u8,
+    played_cards: usize,
 
     turn_player: Seat,
     cards_played: ArrayVec<[Card; 52]>,
@@ -127,6 +128,15 @@ impl BridgeGame {
             }
         }
     }
+
+    fn moves(&self) -> Vec<Card> {
+        let mut res = Vec::new();
+        self.info_for_turn_player().run_for_moves(|m| {
+            res.push(m);
+        });
+
+        res
+    }
 }
 
 impl OracleGamestate<BridgeInfoSet> for BridgeGame {
@@ -146,6 +156,8 @@ impl OracleGamestate<BridgeInfoSet> for BridgeGame {
     fn advance(&self, m: &Card) -> Self {
         let mut new = self.clone();
 
+        new.played_cards += 1;
+
         *new.turn_player_hand_mut() -= *m;
         new.cards_played.push(*m);
         new.hand_of_cards_played += *m;
@@ -160,7 +172,7 @@ impl OracleGamestate<BridgeInfoSet> for BridgeGame {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct UniversalInformation {
     contract: Contract,
 
@@ -175,25 +187,6 @@ pub struct UniversalInformation {
 
     cards_played: Hand,
 }
-
-impl PartialEq<Self> for UniversalInformation {
-    fn eq(&self, other: &Self) -> bool {
-        other.lead.eq(&self.lead) && other.dummy_hand.eq(&self.dummy_hand) && other.cards_played.eq(&self.cards_played)
-    }
-}
-
-impl Eq for UniversalInformation {
-
-}
-
-impl Hash for UniversalInformation {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.lead.hash(state);
-        self.dummy_hand.hash(state);
-        self.cards_played.hash(state);
-    }
-}
-
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DeclarerInfoSet {
@@ -237,6 +230,15 @@ impl BridgeInfoSet {
         }
     }
 
+    pub fn moves(&self) -> Vec<Card> {
+        let mut res = Vec::new();
+        self.run_for_moves(|m| {
+            res.push(m);
+        });
+
+        res
+    }
+
     fn turn_player_hand(&self) -> &Hand {
         match self {
             BridgeInfoSet::Declarer(i) => &i.declarer_hand,
@@ -246,14 +248,14 @@ impl BridgeInfoSet {
         }
     }
 
-    fn other_visible_hand(&self) -> &Hand {
-        match self {
-            BridgeInfoSet::Declarer(i) => &i.universal_information.dummy_hand,
-            BridgeInfoSet::AfterDeclarer(i) => &i.universal_information.dummy_hand,
-            BridgeInfoSet::Dummy(i) => &i.declarer_hand,
-            BridgeInfoSet::BeforeDeclarer(i) => &i.universal_information.dummy_hand,
-        }
-    }
+    // fn other_visible_hand(&self) -> &Hand {
+    //     match self {
+    //         BridgeInfoSet::Declarer(i) => &i.universal_information.dummy_hand,
+    //         BridgeInfoSet::AfterDeclarer(i) => &i.universal_information.dummy_hand,
+    //         BridgeInfoSet::Dummy(i) => &i.declarer_hand,
+    //         BridgeInfoSet::BeforeDeclarer(i) => &i.universal_information.dummy_hand,
+    //     }
+    // }
 
     fn universal_information(&self) -> &UniversalInformation {
         match self {
@@ -264,36 +266,37 @@ impl BridgeInfoSet {
         }
     }
 
-    fn materialize_gamestate(&self, other_a: Hand, other_b: Hand) -> BridgeGame {
-        assert_eq!(self.universal_information().cards_played.len() % 4, 0);
-
-        let universal_info = self.universal_information();
-        let dummy = universal_info.dummy_hand;
-
-        let (before, declarer, after, turn) = match self {
-            BridgeInfoSet::Declarer(i) => (other_a, i.declarer_hand, other_b, Seat::Declarer),
-            BridgeInfoSet::AfterDeclarer(i) => {
-                (other_a, other_b, i.after_hand, Seat::AfterDeclarer)
-            }
-            BridgeInfoSet::Dummy(i) => (other_a, i.declarer_hand, other_b, Seat::Dummy),
-            BridgeInfoSet::BeforeDeclarer(i) => {
-                (i.before_hand, other_a, other_b, Seat::BeforeDeclarer)
-            }
-        };
-
-        BridgeGame {
-            before_hand: before,
-            declarer_hand: declarer,
-            after_hand: after,
-            dummy_hand: dummy,
-            hand_of_cards_played: universal_info.cards_played,
-            cards_played: ArrayVec::from(universal_info.cards_played.cards()),
-            contract: universal_info.contract,
-            declarer_tricks: universal_info.declarer_tricks,
-            defender_tricks: universal_info.defender_tricks,
-            turn_player: turn,
-        }
-    }
+    // fn materialize_gamestate(&self, other_a: Hand, other_b: Hand) -> BridgeGame {
+    //     assert_eq!(self.universal_information().cards_played.len() % 4, 0);
+    //
+    //     let universal_info = self.universal_information();
+    //     let dummy = universal_info.dummy_hand;
+    //
+    //     let (before, declarer, after, turn) = match self {
+    //         BridgeInfoSet::Declarer(i) => (other_a, i.declarer_hand, other_b, Seat::Declarer),
+    //         BridgeInfoSet::AfterDeclarer(i) => {
+    //             (other_a, other_b, i.after_hand, Seat::AfterDeclarer)
+    //         }
+    //         BridgeInfoSet::Dummy(i) => (other_a, i.declarer_hand, other_b, Seat::Dummy),
+    //         BridgeInfoSet::BeforeDeclarer(i) => {
+    //             (i.before_hand, other_a, other_b, Seat::BeforeDeclarer)
+    //         }
+    //     };
+    //
+    //     BridgeGame {
+    //         before_hand: before,
+    //         declarer_hand: declarer,
+    //         after_hand: after,
+    //         dummy_hand: dummy,
+    //         hand_of_cards_played: universal_info.cards_played,
+    //         cards_played: ArrayVec::from(universal_info.cards_played.cards()),
+    //         contract: universal_info.contract,
+    //         declarer_tricks: universal_info.declarer_tricks,
+    //         defender_tricks: universal_info.defender_tricks,
+    //         played_cards: self.universal_information().cards_played.len() as usize,
+    //         turn_player: turn,
+    //     }
+    // }
 }
 
 impl VisibleInfo for BridgeInfoSet {
@@ -313,68 +316,78 @@ impl VisibleInfo for BridgeInfoSet {
         }
     }
 
-    fn moves(&self) -> Moves<Self::Move> {
+    fn run_for_moves(&self, mut f: impl FnMut(Self::Move)) -> Option<UtilityForAllPlayers> {
         let universal_info = self.universal_information();
+        let hand = self.turn_player_hand();
 
-        let cards_to_play = match self.universal_information().lead {
-            Some((_, lead_card)) => {
-                let matching_cards = self.turn_player_hand().cards_for_suit(lead_card.suit());
-                if !matching_cards.is_empty() {
-                    matching_cards.to_vec()
-                } else {
-                    self.turn_player_hand().cards().to_vec()
-                }
-            }
-            None => self.turn_player_hand().cards().to_vec(),
-        };
-
-        if cards_to_play.is_empty() {
+        // If our hand is empty, we need to return a terminal
+        if hand.is_empty() {
             let tricks_for_declarer = universal_info.declarer_tricks;
             let value = universal_info
                 .contract
                 .declarer_points(tricks_for_declarer as i32) as Utility;
 
-            return Moves::Terminal {
-                utility: UtilityForAllPlayers {
-                    util: tiny_vec![value, -value, value, -value],
-                },
-            };
+            return Some(UtilityForAllPlayers {
+                util: [value, -value, value, -value],
+            });
         }
 
-        Moves::PossibleMoves(cards_to_play)
+        // If there is no lead card, we need to allow all moves
+        let lead_suit = match self.universal_information().lead {
+            Some((_, lead_card)) => lead_card.suit(),
+            None => {
+                hand.run_for_cards(f);
+                return None;
+            }
+        };
+
+        let mut found_matching = false;
+        hand.run_for_cards(|card| {
+            if card.suit() == lead_suit {
+                found_matching = true;
+                f(card)
+            }
+        });
+
+        if !found_matching {
+            hand.run_for_cards(f);
+        }
+
+        None
     }
 
     fn get_all_possible_gamestates(&self) -> impl Iterator<Item = (Self::Gamestate, Probability)> {
-        todo!();
-
-        assert_eq!(self.universal_information().cards_played.len() % 4, 0);
-
-        let my_hand = *self.turn_player_hand();
-        let other_hand = *self.other_visible_hand();
-        assert_eq!(my_hand.len(), other_hand.len());
-
-        let missing_cards = (*FULL_HAND) - my_hand - other_hand;
-
-        let mut res = Vec::new();
-
-        // for subset in missing_cards
-        //     .cards()
-        //     .iter()
-        //     .permutations(my_hand.len() as usize)
-        //     .take(10_000)
-        // {
-        //     let hand_a = Hand::new(&subset);
-        //     let hand_b = missing_cards - hand_a;
+        // FIXME: Obviously dumb
+        vec![].into_iter()
         //
-        //     res.push((self.materialize_gamestate(hand_a, hand_b), 1.0));
+        // assert_eq!(self.universal_information().cards_played.len() % 4, 0);
+        //
+        // let my_hand = *self.turn_player_hand();
+        // let other_hand = *self.other_visible_hand();
+        // assert_eq!(my_hand.len(), other_hand.len());
+        //
+        // let missing_cards = (*FULL_HAND) - my_hand - other_hand;
+        //
+        // let mut res = Vec::new();
+        //
+        // // for subset in missing_cards
+        // //     .cards()
+        // //     .iter()
+        // //     .permutations(my_hand.len() as usize)
+        // //     .take(10_000)
+        // // {
+        // //     let hand_a = Hand::new(&subset);
+        // //     let hand_b = missing_cards - hand_a;
+        // //
+        // //     res.push((self.materialize_gamestate(hand_a, hand_b), 1.0));
+        // // }
+        //
+        // let n = res.len() as Probability;
+        // for (_, prob) in &mut res {
+        //     *prob = 1.0 / n;
         // }
-
-        let n = res.len() as Probability;
-        for (_, prob) in &mut res {
-            *prob = 1.0 / n;
-        }
-
-        res.into_iter()
+        //
+        // res.into_iter()
     }
 
     fn gamestate_sampler(&self) -> impl GamestateSampler<Info = Self> {
@@ -525,6 +538,7 @@ impl GamestateSampler for BridgeGamestateSampler {
             contract: self.universal_information.contract,
             declarer_tricks: self.universal_information.declarer_tricks,
             defender_tricks: self.universal_information.defender_tricks,
+            played_cards: self.universal_information.cards_played.len() as usize,
             turn_player: self.turn_player,
             cards_played: self.universal_information.cards_played.cards(),
             hand_of_cards_played: self.universal_information.cards_played,
@@ -544,9 +558,8 @@ mod test {
     use crate::bridge::contract::{Contract, Doubling};
     use crate::bridge::game::{BridgeInfoSet, DeclarerInfoSet, UniversalInformation};
     use crate::bridge::hand::Hand;
-    use crate::cfr::game_model::{OracleGamestate, VisibleInfo, GamestateSampler};
+    use crate::cfr::game_model::{GamestateSampler, OracleGamestate, VisibleInfo};
     use crate::cfr::strategy_generation::generate_strategy_2;
-    use crate::cfr::strategy_generation::strategy::Strategy;
 
     #[test]
     fn bridge_master_one() {
@@ -560,18 +573,37 @@ mod test {
                     declarer_vulnerable: false,
                 },
                 defender_tricks: 0,
-                declarer_tricks: 1,
+                declarer_tricks: 6,
                 cards_played: Hand::new(&[
                     Card::new(Suit::Hearts, Rank::King),
                     Card::new(Suit::Hearts, Rank::Three),
                     Card::new(Suit::Hearts, Rank::Six),
                     Card::new(Suit::Hearts, Rank::Ace),
+
+                    Card::new(Suit::Diamonds, Rank::King),
+                    Card::new(Suit::Diamonds, Rank::Six),
+                    Card::new(Suit::Diamonds, Rank::Seven),
+                    Card::new(Suit::Diamonds, Rank::Eight),
+
+                    Card::new(Suit::Diamonds, Rank::Ace),
+                    Card::new(Suit::Diamonds, Rank::Five),
+                    Card::new(Suit::Diamonds, Rank::Jack),
+                    Card::new(Suit::Diamonds, Rank::Ten),
+
+                    Card::new(Suit::Spades, Rank::King),
+                    Card::new(Suit::Spades, Rank::Eight),
+                    Card::new(Suit::Spades, Rank::Two),
+                    Card::new(Suit::Spades, Rank::Three),
+
+                    Card::new(Suit::Spades, Rank::Seven),
+                    Card::new(Suit::Spades, Rank::Ace),
+                    Card::new(Suit::Spades, Rank::Four),
+                    Card::new(Suit::Spades, Rank::Five),
+
                 ]),
                 lead: None,
                 dummy_hand: Hand::new(&[
                     Card::new(Suit::Spades, Rank::Nine),
-                    Card::new(Suit::Spades, Rank::Eight),
-                    Card::new(Suit::Spades, Rank::Seven),
                     Card::new(Suit::Hearts, Rank::Five),
                     Card::new(Suit::Hearts, Rank::Four),
                     Card::new(Suit::Clubs, Rank::King),
@@ -579,20 +611,14 @@ mod test {
                     Card::new(Suit::Clubs, Rank::Four),
                     Card::new(Suit::Clubs, Rank::Three),
                     Card::new(Suit::Clubs, Rank::Two),
-                    Card::new(Suit::Diamonds, Rank::King),
-                    Card::new(Suit::Diamonds, Rank::Six),
                 ]),
             },
             declarer_hand: Hand::new(&[
-                Card::new(Suit::Spades, Rank::Ace),
-                Card::new(Suit::Spades, Rank::King),
                 Card::new(Suit::Spades, Rank::Queen),
                 Card::new(Suit::Spades, Rank::Jack),
                 Card::new(Suit::Spades, Rank::Ten),
                 Card::new(Suit::Hearts, Rank::Two),
                 Card::new(Suit::Clubs, Rank::Ace),
-                Card::new(Suit::Diamonds, Rank::Ace),
-                Card::new(Suit::Diamonds, Rank::Five),
                 Card::new(Suit::Diamonds, Rank::Four),
                 Card::new(Suit::Diamonds, Rank::Three),
                 Card::new(Suit::Diamonds, Rank::Two),
@@ -603,12 +629,15 @@ mod test {
         // let strategy = Strategy::default();
 
         let mut board = infoset.gamestate_sampler().sample().0;
-        println!("{:?}", strategy.get_move_probabilities(&infoset));
+        println!("{:?}", strategy.get_move_probabilities(infoset.clone()));
         println!("{:?}", board);
-        println!("{:?}", strategy.get_move_probabilities(&board.info_for_turn_player()));
+        println!(
+            "{:?}",
+            strategy.get_move_probabilities(board.info_for_turn_player().clone())
+        );
         println!();
 
-        while let Some(m) = strategy.pick_move(&board.info_for_turn_player()) {
+        while let Some(m) = strategy.pick_move(board.info_for_turn_player().clone()) {
             board = board.advance(&m);
             println!("board {:?}", board);
             println!("lead {:?}", board.lead());
@@ -616,7 +645,10 @@ mod test {
             println!("moves {:?}", board.info_for_turn_player().moves());
             println!();
 
-            println!("{:?}", strategy.get_move_probabilities(&board.info_for_turn_player()));
+            println!(
+                "{:?}",
+                strategy.get_move_probabilities(board.info_for_turn_player().clone())
+            );
         }
     }
 }

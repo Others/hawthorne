@@ -1,58 +1,38 @@
-use crate::cfr::game_model::{
-    AtomicProbability, Moves, Probability, UtilityForAllPlayers, VisibleInfo,
-};
-use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
-use rustc_hash::{FxHashMap, FxHasher};
+use crate::cfr::game_model::{Probability, VisibleInfo};
+use crate::cfr::strategy_generation::workspace_data::data_for_infoset::DataForInfoSet;
+use crate::cfr::strategy_generation::workspace_data::data_for_known_infosets::DataForKnownInfosets;
+use rustc_hash::FxHashMap;
 use std::collections::hash_map::Iter;
 use std::fmt::{Debug, Formatter};
-use std::hash::BuildHasherDefault;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Strategy<INFO: VisibleInfo> {
-    pub(crate) strategy: DashMap<INFO, StrategyForInfo<INFO>, BuildHasherDefault<FxHasher>>,
+    pub(crate) infosets: DataForKnownInfosets<INFO>,
 }
 
 impl<INFO: VisibleInfo> Strategy<INFO> {
-
-    pub fn get_move_probabilities(&self, info: &INFO) -> StrategyForInfoView<INFO> {
-        match self.strategy.get(info) {
-            Some(v) => StrategyForInfoView { v },
-            None => self.get_move_probabilities_locking(info),
-        }
+    pub fn get_move_probabilities(&self, info: INFO) -> StrategyForInfoView<INFO> {
+        StrategyForInfoView::new(self.infosets.data_for_infoset(info))
     }
 
-    fn get_move_probabilities_locking(&self, info: &INFO) -> StrategyForInfoView<INFO> {
-        let v = self
-            .strategy
-            .entry(info.clone())
-            .or_insert_with(|| match info.moves() {
-                Moves::PossibleMoves(moves) => {
-                    let len = moves.len() as Probability;
-
-                    let m = moves
-                        .into_iter()
-                        .map(|m| (m, AtomicProbability::from(1.0 / len)))
-                        .collect();
-                    StrategyForInfo {
-                        strategy: m,
-                        terminal_utility: None,
-                    }
-                }
-                Moves::Terminal { utility } => StrategyForInfo {
-                    strategy: FxHashMap::default(),
-                    terminal_utility: Some(utility),
-                },
-            })
-            .downgrade();
-
-        StrategyForInfoView { v }
-    }
-    pub fn pick_move(&self, info: &INFO) -> Option<INFO::Move> {
+    pub fn pick_move(&self, info: INFO) -> Option<INFO::Move> {
         let move_probabilities = self.get_move_probabilities(info);
+        eprintln!(
+            "The current infoset has an expected value of {:?}",
+            move_probabilities
+                .data_for_info_set
+                .get_cumulative_counterfactual()
+        );
+        for move_with_data in move_probabilities.data_for_info_set.moves() {
+            eprintln!(
+                "\tMove {:?} has regret {:?}, probability {:?}",
+                move_with_data.m,
+                move_with_data.d.regret(),
+                move_with_data.d.load_move_probability_unchecked()
+            );
+        }
 
-        if move_probabilities.v.terminal_utility.is_some() {
+        if move_probabilities.data_for_info_set.is_terminal() {
             return None;
         }
 
@@ -67,12 +47,20 @@ impl<INFO: VisibleInfo> Strategy<INFO> {
         for m in moves {
             let prob = move_probabilities.move_probability(&m);
             cumulative += prob;
+            eprintln!(
+                "- Move {:?} has probability {:?} cumm {:?}",
+                m, prob, cumulative
+            );
 
             if mark < cumulative {
                 return Some(m);
             }
         }
 
+        eprintln!(
+            "Error with move probabilities {:?}",
+            move_probabilities.moves
+        );
         panic!("Move probabilities did not sum to 1.0!")
     }
 }
@@ -80,64 +68,57 @@ impl<INFO: VisibleInfo> Strategy<INFO> {
 impl<INFO: VisibleInfo> Default for Strategy<INFO> {
     fn default() -> Self {
         Self {
-            strategy: DashMap::default(),
+            infosets: Default::default(),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct StrategyForInfo<INFO: VisibleInfo> {
-    strategy: FxHashMap<INFO::Move, AtomicProbability>,
-    terminal_utility: Option<UtilityForAllPlayers>,
+pub struct StrategyForInfoView<INFO: VisibleInfo> {
+    data_for_info_set: Arc<DataForInfoSet<INFO>>,
+    moves: FxHashMap<INFO::Move, Probability>,
 }
 
-impl<INFO: VisibleInfo> StrategyForInfo<INFO> {
-    pub fn iter(&self) -> Iter<INFO::Move, AtomicProbability> {
-        self.strategy.iter()
+impl<INFO: VisibleInfo> StrategyForInfoView<INFO> {
+    pub(crate) fn new(data_for_info_set: Arc<DataForInfoSet<INFO>>) -> Self {
+        Self {
+            moves: data_for_info_set
+                .moves()
+                .iter()
+                .map(|move_with_data| {
+                    (
+                        move_with_data.m.clone(),
+                        move_with_data
+                            .d
+                            .load_move_probability(data_for_info_set.moves().len()),
+                    )
+                })
+                .collect(),
+            data_for_info_set,
+        }
     }
 
-    pub fn immediate_utility(&self) -> Option<&UtilityForAllPlayers> {
-        self.terminal_utility.as_ref()
-    }
-
-    pub fn number_of_moves(&self) -> usize {
-        self.strategy.len()
-    }
-}
-
-pub struct StrategyForInfoView<'a, INFO: VisibleInfo> {
-    v: Ref<'a, INFO, StrategyForInfo<INFO>>,
-}
-
-impl<'a, INFO: VisibleInfo> StrategyForInfoView<'a, INFO> {
-    pub fn iter(&self) -> Iter<INFO::Move, AtomicProbability> {
-        self.v.iter()
-    }
-
-    pub fn immediate_utility(&self) -> Option<&UtilityForAllPlayers> {
-        self.v.immediate_utility()
+    pub fn iter(&self) -> Iter<'_, INFO::Move, Probability> {
+        self.moves.iter()
     }
 
     pub fn move_count(&self) -> usize {
-        self.v.strategy.len()
-    }
-
-    pub fn info(&self) -> &INFO {
-        self.v.key()
+        self.moves.len()
     }
 
     pub fn move_probability(&self, m: &INFO::Move) -> Probability {
-        self.v
-            .strategy
+        *self
+            .moves
             .get(m)
             .expect("All moves for infoset must have probability")
-            .load(Ordering::Relaxed)
     }
 }
 
-impl<'a, INFO: VisibleInfo> Debug for StrategyForInfoView<'a, INFO> {
+impl<INFO: VisibleInfo> Debug for StrategyForInfoView<INFO> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let strategy_for_info = &*self.v;
-        strategy_for_info.fmt(f)
+        f.write_str("StrategyForInfo[")?;
+        self.data_for_info_set.fmt(f)?;
+        f.write_str("]")?;
+
+        Ok(())
     }
 }

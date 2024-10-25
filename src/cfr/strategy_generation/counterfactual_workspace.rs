@@ -2,7 +2,6 @@ use crate::cfr::game_model::{UtilityForAllPlayers, VisibleInfo};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use thread_local::ThreadLocal;
-use crate::cfr::strategy_generation::strategy::StrategyForInfoView;
 
 #[derive(Debug)]
 pub struct CounterfactualWorkspace<INFO: VisibleInfo> {

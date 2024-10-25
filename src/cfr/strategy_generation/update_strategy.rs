@@ -1,43 +1,35 @@
-use crate::cfr::game_model::{Utility, VisibleInfo};
-use crate::cfr::strategy_generation::CfrProgressData;
-use std::sync::atomic::Ordering;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use crate::cfr::game_model::{Probability, VisibleInfo};
+use crate::cfr::strategy_generation::workspace_data::StrategyGenerationProgress;
 
 pub(crate) fn update_strategy_from_regret<INFO: VisibleInfo>(
-    progress_data: &CfrProgressData<INFO>,
+    strategy_generation_progress: &StrategyGenerationProgress<INFO>,
 ) {
-    progress_data.witnessed.par_iter().for_each(|entry| {
-        let info = entry.key();
-
-        let strategy =  progress_data.current_strategy.strategy.get_mut(
-            info
-        ).unwrap();
-
+    strategy_generation_progress.consume_updated_infosets(|i| {
         let mut total_regret = 0.0;
-        let number_of_moves = strategy.number_of_moves() as Utility;
+        let number_of_moves = i.moves().len();
 
         // First we get the regret of every move, and write it in as a fake probability
         // This is a hack to avoid having to store any intermediate values
-        let regret_for_moves = progress_data
-            .cumulative_regret
-            .get_regret_for_all_moves(info);
-        for (m, probability) in strategy.iter() {
-            let move_regret = regret_for_moves.get_move_regret(m);
-            total_regret += move_regret;
-            probability.store(move_regret, Ordering::Relaxed);
+        for move_with_data in i.moves() {
+            total_regret += move_with_data.d.regret();
         }
 
         // Next we grab those stored regret values and divide them by the total regret
-        for (_, probability) in strategy.iter() {
-            let stored_regret_value = probability.load(Ordering::Relaxed);
-
+        let mut total_probability = 0.0;
+        for move_with_data in i.moves() {
             let new_probability = if total_regret > 0.0 {
-                stored_regret_value / total_regret
+                move_with_data.d.regret() / total_regret
             } else {
-                1.0 / number_of_moves
+                1.0 / number_of_moves as Probability
             };
 
-            probability.store(new_probability, Ordering::Relaxed);
+            total_probability += new_probability;
+
+            debug_assert!(new_probability >= 0.0);
+            debug_assert!(new_probability <= 1.0);
+            debug_assert!(total_probability <= 1.1);
+
+            move_with_data.d.write_move_probability(new_probability);
         }
     });
 }
