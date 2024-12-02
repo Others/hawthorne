@@ -6,8 +6,8 @@ use crate::cfr::strategy_generation::workspace_data::batch_item_data::DataPerBat
 use crate::cfr::strategy_generation::workspace_data::data_for_infoset::DataForInfoSet;
 use crate::cfr::strategy_generation::workspace_data::timestamp::Timestamp;
 use crate::cfr::strategy_generation::workspace_data::StrategyGenerationProgress;
+use bumpalo_herd::Member;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct DataForMove {
@@ -66,14 +66,13 @@ impl DataForMove {
         &self.utility_after_move
     }
 
-    pub fn get_post_move_infoset<INFO: VisibleInfo>(
+    pub fn get_post_move_infoset<'h, INFO: VisibleInfo>(
         &self,
-        strategy_generation_progress: &StrategyGenerationProgress<INFO>,
-        // FIXME: Remove
-        _timestamp: Timestamp,
+        strategy_generation_progress: &StrategyGenerationProgress<'h, INFO>,
+        member: &Member<'h>,
         gamestate_before_move: &INFO::Gamestate,
         m: &INFO::Move,
-    ) -> (Arc<DataForInfoSet<INFO>>, INFO::Gamestate) {
+    ) -> (&'h DataForInfoSet<INFO>, INFO::Gamestate) {
         // if let Some(d) = self.cached_post_move_infoset.get(timestamp) {
         //     return d.as_ref().unwrap().clone();
         // }
@@ -81,7 +80,7 @@ impl DataForMove {
         let state_after_move = gamestate_before_move.advance(m);
         let info_after_move = state_after_move.info_for_turn_player();
         let data_for_info_after_move =
-            strategy_generation_progress.get_data_for_infoset(info_after_move);
+            strategy_generation_progress.get_data_for_infoset(info_after_move, member);
 
         // self.cached_post_move_infoset.set(
         //     Some((data_for_info_after_move.clone(), state_after_move.clone())),
@@ -91,21 +90,25 @@ impl DataForMove {
         (data_for_info_after_move, state_after_move)
     }
 
-    pub fn accumulate_regret<INFO: VisibleInfo>(
+    pub fn accumulate_regret<'h, INFO: VisibleInfo>(
         &self,
-        strategy_generation_progress: &StrategyGenerationProgress<INFO>,
+        strategy_generation_progress: &StrategyGenerationProgress<'h, INFO>,
+        member: &Member<'h>,
         timestamp: Timestamp,
         pre_move_info: &DataForInfoSet<INFO>,
         pre_move_gamestate: &INFO::Gamestate,
         m: &INFO::Move,
     ) {
         let turn = pre_move_info.turn();
-        let counterfactual_before = pre_move_info.get_cumulative_counterfactual();
+        let counterfactual_before = pre_move_info
+            .get_iteration_utility_if_ready(timestamp)
+            .unwrap();
 
         let info_after = pre_move_gamestate.advance(m).info_for_turn_player();
         let counterfactual_after = strategy_generation_progress
-            .get_data_for_infoset(info_after)
-            .get_cumulative_counterfactual();
+            .get_data_for_infoset(info_after, member)
+            .get_iteration_utility_if_ready(timestamp)
+            .unwrap();
 
         // let counterfactual_after = self
         //     .cached_post_move_infoset
@@ -119,6 +122,7 @@ impl DataForMove {
         let new_positive_regret =
             (counterfactual_after.get(turn) - counterfactual_before.get(turn)).max(0.0);
 
+        // FIXME: Make this configurable
         let weighted_regret = new_positive_regret * timestamp.cfr_iteration as Utility;
 
         self.cumulative_move_regret

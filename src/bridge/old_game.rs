@@ -3,8 +3,8 @@ use crate::bridge::contract::Contract;
 use crate::bridge::hand::Hand;
 use crate::bridge::seat::Seat;
 use crate::cfr::game_model::{
-    GamestateSampler, OracleGamestate, PlayerNumber, Probability, Utility,
-    UtilityForAllPlayers, VisibleInfo,
+    GamestateSampler, OracleGamestate, PlayerNumber, Probability, Utility, UtilityForAllPlayers,
+    VisibleInfo,
 };
 use std::hash::Hash;
 use tinyvec::ArrayVec;
@@ -147,6 +147,10 @@ impl OracleGamestate<BridgeInfoSet> for BridgeGame {
             Seat::Dummy => BridgeInfoSet::Dummy(self.dummy_info()),
             Seat::BeforeDeclarer => BridgeInfoSet::BeforeDeclarer(self.before_info()),
         }
+    }
+
+    fn players_playing(&self) -> PlayerNumber {
+        4
     }
 
     fn turn(&self) -> PlayerNumber {
@@ -303,7 +307,7 @@ impl VisibleInfo for BridgeInfoSet {
     type Move = Card;
     type Gamestate = BridgeGame;
 
-    fn max_players(&self) -> PlayerNumber {
+    fn players_playing(&self) -> PlayerNumber {
         4
     }
 
@@ -355,46 +359,9 @@ impl VisibleInfo for BridgeInfoSet {
 
         None
     }
-
-    fn get_all_possible_gamestates(&self) -> impl Iterator<Item = (Self::Gamestate, Probability)> {
-        // FIXME: Obviously dumb
-        vec![].into_iter()
-        //
-        // assert_eq!(self.universal_information().cards_played.len() % 4, 0);
-        //
-        // let my_hand = *self.turn_player_hand();
-        // let other_hand = *self.other_visible_hand();
-        // assert_eq!(my_hand.len(), other_hand.len());
-        //
-        // let missing_cards = (*FULL_HAND) - my_hand - other_hand;
-        //
-        // let mut res = Vec::new();
-        //
-        // // for subset in missing_cards
-        // //     .cards()
-        // //     .iter()
-        // //     .permutations(my_hand.len() as usize)
-        // //     .take(10_000)
-        // // {
-        // //     let hand_a = Hand::new(&subset);
-        // //     let hand_b = missing_cards - hand_a;
-        // //
-        // //     res.push((self.materialize_gamestate(hand_a, hand_b), 1.0));
-        // // }
-        //
-        // let n = res.len() as Probability;
-        // for (_, prob) in &mut res {
-        //     *prob = 1.0 / n;
-        // }
-        //
-        // res.into_iter()
-    }
-
-    fn gamestate_sampler(&self) -> impl GamestateSampler<Info = Self> {
-        BridgeGamestateSampler::new(self)
-    }
 }
 
+#[derive(Clone)]
 pub struct BridgeGamestateSampler {
     universal_information: UniversalInformation,
 
@@ -506,7 +473,8 @@ impl GamestateSampler for BridgeGamestateSampler {
     type Info = BridgeInfoSet;
 
     fn sample(&mut self) -> (<Self::Info as VisibleInfo>::Gamestate, Probability) {
-        let prob = 1.0 / (self.combos as Probability);
+        // FIXME: Commented out code lol
+        let prob = 1.0; // / (self.combos as Probability);
         let mut cards_to_pick = self.missing_cards;
 
         let mut dummy_hand = self.dummy_hand;
@@ -556,13 +524,16 @@ impl GamestateSampler for BridgeGamestateSampler {
 mod test {
     use crate::bridge::card::{Card, Rank, Suit};
     use crate::bridge::contract::{Contract, Doubling};
-    use crate::bridge::game::{BridgeInfoSet, DeclarerInfoSet, UniversalInformation};
     use crate::bridge::hand::Hand;
-    use crate::cfr::game_model::{GamestateSampler, OracleGamestate, VisibleInfo};
-    use crate::cfr::strategy_generation::generate_strategy_2;
+    use crate::bridge::old_game::{
+        BridgeGamestateSampler, BridgeInfoSet, DeclarerInfoSet, UniversalInformation,
+    };
+    use crate::cfr::game_model::{GamestateSampler, OracleGamestate};
+    use crate::cfr::strategy_generation::strategy_generator::StrategyGenerator;
+    use bumpalo_herd::Herd;
 
     #[test]
-    fn bridge_master_one() {
+    fn bridge_master_one_modified() {
         let infoset = BridgeInfoSet::Declarer(DeclarerInfoSet {
             universal_information: UniversalInformation {
                 contract: Contract {
@@ -573,33 +544,28 @@ mod test {
                     declarer_vulnerable: false,
                 },
                 defender_tricks: 0,
-                declarer_tricks: 6,
+                declarer_tricks: 5,
                 cards_played: Hand::new(&[
                     Card::new(Suit::Hearts, Rank::King),
                     Card::new(Suit::Hearts, Rank::Three),
                     Card::new(Suit::Hearts, Rank::Six),
                     Card::new(Suit::Hearts, Rank::Ace),
-
                     Card::new(Suit::Diamonds, Rank::King),
                     Card::new(Suit::Diamonds, Rank::Six),
                     Card::new(Suit::Diamonds, Rank::Seven),
                     Card::new(Suit::Diamonds, Rank::Eight),
-
                     Card::new(Suit::Diamonds, Rank::Ace),
                     Card::new(Suit::Diamonds, Rank::Five),
                     Card::new(Suit::Diamonds, Rank::Jack),
                     Card::new(Suit::Diamonds, Rank::Ten),
-
                     Card::new(Suit::Spades, Rank::King),
                     Card::new(Suit::Spades, Rank::Eight),
                     Card::new(Suit::Spades, Rank::Two),
                     Card::new(Suit::Spades, Rank::Three),
-
                     Card::new(Suit::Spades, Rank::Seven),
                     Card::new(Suit::Spades, Rank::Ace),
                     Card::new(Suit::Spades, Rank::Four),
                     Card::new(Suit::Spades, Rank::Five),
-
                 ]),
                 lead: None,
                 dummy_hand: Hand::new(&[
@@ -625,19 +591,117 @@ mod test {
             ]),
         });
 
-        let strategy = generate_strategy_2(infoset.clone(), 1000);
-        // let strategy = Strategy::default();
+        let herd = Herd::new();
+        let strategy_generator = StrategyGenerator::new(&herd);
 
-        let mut board = infoset.gamestate_sampler().sample().0;
-        println!("{:?}", strategy.get_move_probabilities(infoset.clone()));
+        let mut sampler = BridgeGamestateSampler::new(&infoset);
+        strategy_generator.refine_strategy(sampler.clone(), 128);
+
+        let mut board = sampler.sample().0;
         println!("{:?}", board);
         println!(
             "{:?}",
-            strategy.get_move_probabilities(board.info_for_turn_player().clone())
+            strategy_generator
+                .strategy_for_info(infoset.clone())
+                .move_probabilities(),
         );
         println!();
 
-        while let Some(m) = strategy.pick_move(board.info_for_turn_player().clone()) {
+        while let Some(m) = strategy_generator
+            .strategy_for_info(board.info_for_turn_player().clone())
+            .pick_move()
+        {
+            board = board.advance(&m);
+            println!("board {:?}", board);
+            println!("lead {:?}", board.lead());
+            println!("turn player hand {}", board.turn_player_hand_mut());
+            println!("moves {:?}", board.info_for_turn_player().moves());
+            println!();
+
+            println!("Refining real quick!");
+            strategy_generator.refine_strategy(
+                BridgeGamestateSampler::new(&board.info_for_turn_player()),
+                128,
+            );
+
+            println!(
+                "{:?}",
+                strategy_generator
+                    .strategy_for_info(board.info_for_turn_player().clone())
+                    .move_probabilities(),
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_master_one_full() {
+        let infoset = BridgeInfoSet::Declarer(DeclarerInfoSet {
+            universal_information: UniversalInformation {
+                contract: Contract {
+                    trump: Some(Suit::Spades),
+                    n: 6,
+                    doubling: Doubling::None,
+                    defender_vulnerable: false,
+                    declarer_vulnerable: false,
+                },
+                defender_tricks: 0,
+                declarer_tricks: 1,
+                cards_played: Hand::new(&[
+                    Card::new(Suit::Hearts, Rank::King),
+                    Card::new(Suit::Hearts, Rank::Three),
+                    Card::new(Suit::Hearts, Rank::Six),
+                    Card::new(Suit::Hearts, Rank::Ace),
+                ]),
+                lead: None,
+                dummy_hand: Hand::new(&[
+                    Card::new(Suit::Spades, Rank::Nine),
+                    Card::new(Suit::Spades, Rank::Eight),
+                    Card::new(Suit::Spades, Rank::Seven),
+                    Card::new(Suit::Hearts, Rank::Five),
+                    Card::new(Suit::Hearts, Rank::Four),
+                    Card::new(Suit::Clubs, Rank::King),
+                    Card::new(Suit::Clubs, Rank::Five),
+                    Card::new(Suit::Clubs, Rank::Four),
+                    Card::new(Suit::Clubs, Rank::Three),
+                    Card::new(Suit::Clubs, Rank::Two),
+                    Card::new(Suit::Diamonds, Rank::King),
+                    Card::new(Suit::Diamonds, Rank::Six),
+                ]),
+            },
+            declarer_hand: Hand::new(&[
+                Card::new(Suit::Spades, Rank::Ace),
+                Card::new(Suit::Spades, Rank::King),
+                Card::new(Suit::Spades, Rank::Queen),
+                Card::new(Suit::Spades, Rank::Jack),
+                Card::new(Suit::Spades, Rank::Ten),
+                Card::new(Suit::Hearts, Rank::Two),
+                Card::new(Suit::Clubs, Rank::Ace),
+                Card::new(Suit::Diamonds, Rank::Ace),
+                Card::new(Suit::Diamonds, Rank::Five),
+                Card::new(Suit::Diamonds, Rank::Four),
+                Card::new(Suit::Diamonds, Rank::Three),
+                Card::new(Suit::Diamonds, Rank::Two),
+            ]),
+        });
+
+        let herd = Herd::new();
+        let strategy_generator = StrategyGenerator::new(&herd);
+        let mut sampler = BridgeGamestateSampler::new(&infoset);
+        strategy_generator.refine_strategy(sampler.clone(), 10_000);
+
+        let mut board = sampler.sample().0;
+        println!(
+            "{:?}",
+            strategy_generator
+                .strategy_for_info(infoset.clone())
+                .move_probabilities(),
+        );
+        println!();
+
+        while let Some(m) = strategy_generator
+            .strategy_for_info(board.info_for_turn_player().clone())
+            .pick_move()
+        {
             board = board.advance(&m);
             println!("board {:?}", board);
             println!("lead {:?}", board.lead());
@@ -647,7 +711,9 @@ mod test {
 
             println!(
                 "{:?}",
-                strategy.get_move_probabilities(board.info_for_turn_player().clone())
+                strategy_generator
+                    .strategy_for_info(board.info_for_turn_player())
+                    .move_probabilities(),
             );
         }
     }

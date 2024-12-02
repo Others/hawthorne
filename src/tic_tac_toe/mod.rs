@@ -1,6 +1,5 @@
 use crate::cfr::game_model::{
-    GamestateSampler, OracleGamestate, PlayerNumber, Probability, UtilityForAllPlayers,
-    VisibleInfo,
+    GamestateSampler, OracleGamestate, PlayerNumber, Probability, UtilityForAllPlayers, VisibleInfo,
 };
 use std::fmt::{Display, Formatter};
 use std::sync::LazyLock;
@@ -44,11 +43,8 @@ impl TicTacToeBoard {
     }
 
     fn moves(&self) -> Vec<TicTacToeMove> {
-        match self.winner() {
-            Some(_) => {
-                return Vec::new()
-            }
-            None => {}
+        if self.winner().is_some() {
+            return Vec::new();
         }
 
         let square = match self.turn {
@@ -101,6 +97,10 @@ impl OracleGamestate<TicTacToeBoard> for TicTacToeBoard {
         self.clone()
     }
 
+    fn players_playing(&self) -> PlayerNumber {
+        2
+    }
+
     fn turn(&self) -> PlayerNumber {
         match self.turn {
             Player::X => 0,
@@ -127,7 +127,7 @@ impl VisibleInfo for TicTacToeBoard {
     type Move = TicTacToeMove;
     type Gamestate = TicTacToeBoard;
 
-    fn max_players(&self) -> PlayerNumber {
+    fn players_playing(&self) -> PlayerNumber {
         2
     }
 
@@ -183,15 +183,11 @@ impl VisibleInfo for TicTacToeBoard {
         None
     }
 
-    fn get_all_possible_gamestates(&self) -> impl Iterator<Item = (Self::Gamestate, Probability)> {
-        vec![(self.clone(), 1.0)].into_iter()
-    }
-
-    fn gamestate_sampler(&self) -> impl GamestateSampler<Info = Self> {
-        TicTacToeSampler {
-            board: self.clone(),
-        }
-    }
+    // fn gamestate_sampler(&self) -> impl GamestateSampler<Info = Self> {
+    //     TicTacToeSampler {
+    //         board: self.clone(),
+    //     }
+    // }
 }
 
 impl Default for TicTacToeBoard {
@@ -203,7 +199,7 @@ impl Default for TicTacToeBoard {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TicTacToeSampler {
     board: TicTacToeBoard,
 }
@@ -250,12 +246,20 @@ struct TicTacToeMove {
 #[cfg(test)]
 mod test {
     use crate::cfr::game_model::OracleGamestate;
-    use crate::cfr::strategy_generation::generate_strategy_2;
-    use crate::tic_tac_toe::TicTacToeBoard;
+    use crate::cfr::strategy_generation::strategy_generator::StrategyGenerator;
+    use crate::tic_tac_toe::{TicTacToeBoard, TicTacToeSampler};
+    use bumpalo_herd::Herd;
 
     #[test]
     fn play_a_game() {
-        let strategy = generate_strategy_2(TicTacToeBoard::default(), 1);
+        let herd = Herd::new();
+        let strategy_generator = StrategyGenerator::new(&herd);
+        strategy_generator.refine_strategy(
+            TicTacToeSampler {
+                board: TicTacToeBoard::default(),
+            },
+            1000,
+        );
 
         // for (k, v) in &strategy.probability {
         //     println!("{}", k);
@@ -264,12 +268,25 @@ mod test {
 
         let mut board = TicTacToeBoard::default();
         println!("{}", board);
-        println!("{:?}", strategy.get_move_probabilities(board.clone()));
+        println!(
+            "{:?}",
+            strategy_generator
+                .strategy_for_info(board.clone())
+                .move_probabilities(),
+        );
 
-        while let Some(m) = strategy.pick_move(board.clone()) {
+        while let Some(m) = strategy_generator
+            .strategy_for_info(board.clone())
+            .pick_move()
+        {
             board = board.advance(&m);
             println!("{}", board);
-            println!("{:?}", strategy.get_move_probabilities(board.clone()));
+            println!(
+                "{:?}",
+                strategy_generator
+                    .strategy_for_info(board.clone())
+                    .move_probabilities()
+            );
         }
     }
 }

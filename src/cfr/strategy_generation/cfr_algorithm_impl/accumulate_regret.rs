@@ -1,26 +1,28 @@
 use crate::cfr::game_model::{
-    Probability, RandomGamestateIterator, UtilityForAllPlayers, VisibleInfo,
+    GamestateSampler, OracleGamestate, PlayerNumber, Probability, RandomGamestateIterator,
+    UtilityForAllPlayers, VisibleInfo,
 };
 use crate::cfr::strategy_generation::workspace_data::data_for_infoset::DataForInfoSet;
 use crate::cfr::strategy_generation::workspace_data::data_for_move::DataForMove;
-use crate::cfr::strategy_generation::workspace_data::timestamp::Timestamp;
+use crate::cfr::strategy_generation::workspace_data::timestamp::{Timestamp, MAX_BATCH_SIZE};
 use crate::cfr::strategy_generation::workspace_data::{
     StrategyGenerationProgress, ThreadLocalWorkStack,
 };
+use bumpalo_herd::{Herd, Member};
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use std::sync::Arc;
 
-pub(crate) fn add_to_regret<INFO: VisibleInfo>(
-    starting_info: &INFO,
-    strategy_generation_progress: &StrategyGenerationProgress<INFO>,
+pub(crate) fn add_to_regret<'h, INFO: VisibleInfo, SAMPLER: GamestateSampler<Info = INFO>>(
+    starting_gamestate_sampler: SAMPLER,
+    strategy_generation_progress: &StrategyGenerationProgress<'h, INFO>,
+    herd: &'h Herd,
     iteration: u32,
 ) {
-    let mut gamestates = RandomGamestateIterator::new(starting_info.gamestate_sampler(), 0.1, 1);
+    let mut gamestates = RandomGamestateIterator::new(starting_gamestate_sampler, 1000.0, 10);
     // let par_gamestates = ParallelBridge::par_bridge(gamestates.enumerate());
 
     let mut batch = Vec::new();
-    while batch.len() < 1 {
+    while batch.len() < MAX_BATCH_SIZE {
         batch.push(gamestates.next().unwrap())
     }
 
@@ -29,7 +31,12 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
             let timestamp = Timestamp::new(iteration, i);
 
             let mut workstack = strategy_generation_progress.thread_local_workstack();
-            workstack.push_default(starting_gamestate);
+
+            let member = herd.get();
+
+            let info_set = strategy_generation_progress
+                .get_data_for_infoset(starting_gamestate.info_for_turn_player(), &member);
+            workstack.push(info_set, starting_gamestate);
 
             let mut n: u32 = 0;
             let mut already_ready: u32 = 1;
@@ -39,33 +46,30 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
 
                 n += 1;
                 if n.count_ones() == 1 {
-                    println!(
-                        "Iteration 2^{} (already ready 2^{}, terminal 2^{})",
-                        n.ilog2(),
-                        already_ready.ilog2(),
-                        terminals.ilog2()
-                    );
-                    // println!("Gamestate: {:?}", gamestate);
-                    println!("Stack size: {:?}", workstack.len());
-
-                    println!(
-                        "Size DataForInfoset {:?}",
-                        size_of::<DataForInfoSet<INFO>>()
-                    );
-                    println!("Size DataForMove {:?}", size_of::<DataForMove>());
-                    println!(
-                        "Size Info {:?}",
-                        size_of::<INFO>()
-                    );
-                    println!(
-                        "Size Gamestate {:?}",
-                        size_of::<INFO::Gamestate>()
-                    );
-                    // workstack.print_debug();
-
-                    if n.ilog2() == 23 {
-                        panic!("CAPPED!")
-                    }
+                    // println!(
+                    //     "Timestamp {:?} Iteration 2^{} (already ready 2^{}, terminal 2^{})",
+                    //     timestamp,
+                    //     n.ilog2(),
+                    //     already_ready.ilog2(),
+                    //     terminals.ilog2()
+                    // );
+                    // // println!("Gamestate: {:?}", gamestate);
+                    // println!("Stack size: {:?}", workstack.len());
+                    //
+                    // if n == 1 {
+                    //     println!(
+                    //         "Size DataForInfoset {:?}",
+                    //         size_of::<DataForInfoSet<INFO>>()
+                    //     );
+                    //     println!("Size DataForMove {:?}", size_of::<DataForMove>());
+                    //     println!("Size Info {:?}", size_of::<INFO>());
+                    //     println!("Size Gamestate {:?}", size_of::<INFO::Gamestate>());
+                    // }
+                    // // workstack.print_debug();
+                    //
+                    // if n.ilog2() == 25 {
+                    //     panic!("CAPPED!")
+                    // }
                 }
 
                 // If we already got this value ready, we can skip it
@@ -83,8 +87,33 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
                     continue;
                 }
 
+                // // FIXME: Make this configurable
+                if (iteration as PlayerNumber + i) % gamestate.players_playing()
+                    != data_for_info.turn()
+                {
+                    let next_move = data_for_info.sample_move_deterministic(&gamestate, timestamp);
+                    let next_gamestate = gamestate.advance(&next_move);
+                    let next_info = strategy_generation_progress
+                        .get_data_for_infoset(next_gamestate.info_for_turn_player(), &member);
+
+                    let forwardable_iteration_util =
+                        next_info.get_iteration_utility_if_ready(timestamp);
+
+                    match forwardable_iteration_util {
+                        Some(x) => data_for_info.ready_with_counterfactual(
+                            x,
+                            gamestate_probability,
+                            timestamp,
+                        ),
+                        None => workstack.push(data_for_info, gamestate),
+                    }
+
+                    workstack.push(next_info, next_gamestate);
+                    continue;
+                }
+
                 // Save a spot for this item, in case the moves bellow need done first
-                workstack.push(Arc::clone(&data_for_info), gamestate.clone());
+                workstack.push(data_for_info, gamestate.clone());
 
                 let moves = data_for_info.moves();
                 let n_moves = moves.len();
@@ -94,6 +123,7 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
                 for move_with_data in moves {
                     update_strategy_utility_for_move(
                         strategy_generation_progress,
+                        &member,
                         &mut *workstack,
                         timestamp,
                         &gamestate,
@@ -110,10 +140,11 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
                     workstack.pop();
                     accumulate_regret_with_complete_children(
                         strategy_generation_progress,
+                        &member,
                         timestamp,
                         gamestate_probability,
                         data_for_info,
-                        gamestate,
+                        &gamestate,
                         strategy_util,
                     );
                 }
@@ -122,9 +153,10 @@ pub(crate) fn add_to_regret<INFO: VisibleInfo>(
     );
 }
 
-fn update_strategy_utility_for_move<INFO: VisibleInfo>(
-    strategy_generation_progress: &StrategyGenerationProgress<INFO>,
-    workstack: &mut ThreadLocalWorkStack<INFO>,
+fn update_strategy_utility_for_move<'h, INFO: VisibleInfo>(
+    strategy_generation_progress: &StrategyGenerationProgress<'h, INFO>,
+    member: &Member<'h>,
+    workstack: &mut ThreadLocalWorkStack<'h, INFO>,
 
     timestamp: Timestamp,
 
@@ -146,10 +178,11 @@ fn update_strategy_utility_for_move<INFO: VisibleInfo>(
 
     let (data_after_move, state_after_move) = data_for_move.get_post_move_infoset(
         strategy_generation_progress,
-        timestamp,
+        member,
         gamestate_before_move,
         m,
     );
+
     let utility_after_move = data_after_move.get_iteration_utility_if_ready(timestamp);
     match utility_after_move {
         Some(utility_after_move) => {
@@ -157,20 +190,31 @@ fn update_strategy_utility_for_move<INFO: VisibleInfo>(
             cached_utility_after_move.set(utility_after_move, timestamp);
         }
         None => {
+            // if should_skip_due_to_mccfr(n_moves, data_for_move) {
+            //     // strategy_util.accumulate(&data_after_move.get_cumulative_counterfactual(), move_probability);
+            //     // cached_utility_after_move.set(data_after_move.get_cumulative_counterfactual(), timestamp);
+            //     let default = UtilityForAllPlayers::const_default();
+            //     strategy_util.accumulate(&default, move_probability);
+            //     cached_utility_after_move.set(default, timestamp);
+            //     return;
+            // }
+
             *complete = false;
             workstack.push(data_after_move, state_after_move);
-            // let skip = should_skip_due_to_mccfr(progress_data, info_before_move, m);
-            //
-            // if skip {
-            //     buffer.insert_buffered_value(
-            //         info_after_move,
-            //         BufferedValue {
-            //             utility: UtilityForAllPlayers::default(),
-            //             update_timestamp: timestamp,
-            //         },
-            //     );
         }
     }
+}
+
+fn should_skip_due_to_mccfr(n_moves: usize, move_data: &DataForMove) -> bool {
+    let epsilon = 0.05;
+    let gamma = 2.0;
+    // let gamma = 1.5;
+    let beta = (0.0 as Probability).powi(1);
+
+    let prob = move_data.load_move_probability(n_moves);
+    let mccfr_value = ((beta + gamma * prob) / (beta + 1.0)).max(epsilon);
+
+    fastrand::f64() > mccfr_value
 }
 
 // fn should_skip_due_to_mccfr<INFO: VisibleInfo>(
@@ -200,14 +244,15 @@ fn update_strategy_utility_for_move<INFO: VisibleInfo>(
 //     fastrand::f64() > p
 // }
 
-fn accumulate_regret_with_complete_children<INFO: VisibleInfo>(
-    strategy_generation_progress: &StrategyGenerationProgress<INFO>,
+fn accumulate_regret_with_complete_children<'h, INFO: VisibleInfo>(
+    strategy_generation_progress: &StrategyGenerationProgress<'h, INFO>,
+    member: &Member<'h>,
     timestamp: Timestamp,
 
     starting_gamestate_probability: Probability,
 
-    info_before_move: Arc<DataForInfoSet<INFO>>,
-    gamestate_before_move: INFO::Gamestate,
+    info_before_move: &'h DataForInfoSet<INFO>,
+    gamestate_before_move: &INFO::Gamestate,
     strategy_util: UtilityForAllPlayers,
 ) {
     // We need to do three steps here:
@@ -224,9 +269,10 @@ fn accumulate_regret_with_complete_children<INFO: VisibleInfo>(
     for move_with_data in info_before_move.moves() {
         move_with_data.d.accumulate_regret(
             strategy_generation_progress,
+            member,
             timestamp,
-            &info_before_move,
-            &gamestate_before_move,
+            info_before_move,
+            gamestate_before_move,
             &move_with_data.m,
         )
     }

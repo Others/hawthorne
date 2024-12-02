@@ -1,9 +1,6 @@
 use crate::cfr::game_model::VisibleInfo;
 use crate::cfr::strategy_generation::workspace_data::data_for_move::DataForMove;
-use std::alloc::{alloc_zeroed, Layout};
-use std::mem::{zeroed, MaybeUninit};
-use std::ptr::addr_of_mut;
-use std::{mem, ptr};
+use std::mem::zeroed;
 
 #[derive(Debug)]
 pub(crate) struct MoveWithData<INFO: VisibleInfo> {
@@ -17,7 +14,7 @@ pub(crate) struct MoveWithDataAllocation<INFO: VisibleInfo> {
     // initialized_n: usize,
 }
 
-
+// TODO: Use a herd here?
 impl<INFO: VisibleInfo> MoveWithDataAllocation<INFO> {
     #[must_use]
     pub fn new() -> Self {
@@ -28,9 +25,7 @@ impl<INFO: VisibleInfo> MoveWithDataAllocation<INFO> {
     }
 
     pub fn push(&mut self, m: INFO::Move) {
-        let mut move_with_data: MoveWithData<INFO> = unsafe {
-            zeroed()
-        };
+        let mut move_with_data: MoveWithData<INFO> = unsafe { zeroed() };
         move_with_data.m = m;
 
         self.v.push(move_with_data)

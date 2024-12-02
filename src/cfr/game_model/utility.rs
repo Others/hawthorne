@@ -1,6 +1,7 @@
 use crate::cfr::game_model::{PlayerNumber, Probability};
 use atomic_float::AtomicF64;
 
+// FIXME: Probably should be newtypes
 pub type Utility = f64;
 pub type AtomicUtility = AtomicF64;
 
@@ -8,7 +9,7 @@ pub type AtomicUtility = AtomicF64;
 
 const MAX_PLAYERS: usize = 4;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UtilityForAllPlayers {
     pub(crate) util: [Utility; MAX_PLAYERS],
 }

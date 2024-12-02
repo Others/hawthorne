@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // pub mod old_cfr;
 
 pub mod bridge;

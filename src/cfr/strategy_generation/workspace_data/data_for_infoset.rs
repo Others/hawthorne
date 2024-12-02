@@ -5,7 +5,8 @@ use crate::cfr::strategy_generation::workspace_data::move_data::{
 };
 use crate::cfr::strategy_generation::workspace_data::timestamp::Timestamp;
 use atomic_float::AtomicF64;
-use parking_lot::Mutex;
+use rustc_hash::FxHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]
@@ -14,7 +15,8 @@ pub(crate) struct DataForInfoSet<INFO: VisibleInfo> {
     terminal_utility: Option<UtilityForAllPlayers>,
 
     counterfactual_n: AtomicF64,
-    cumulative_counterfactual: Mutex<UtilityForAllPlayers>,
+    // FIXME: Decide if we need this
+    // cumulative_counterfactual: Mutex<UtilityForAllPlayers>,
     counterfactual_for_current_iteration: DataPerBatchItem<UtilityForAllPlayers>,
 
     // Use this to figure out if we need to write into the `updated_infosets` SegQueue
@@ -38,7 +40,7 @@ impl<INFO: VisibleInfo> DataForInfoSet<INFO> {
             move_data: move_data.into_vec(),
 
             counterfactual_n: AtomicF64::new(0.0),
-            cumulative_counterfactual: const { Mutex::new(UtilityForAllPlayers::const_default()) },
+            // cumulative_counterfactual: const { Mutex::new(UtilityForAllPlayers::const_default()) },
             counterfactual_for_current_iteration: const { DataPerBatchItem::const_default_utility() },
 
             global_updated_iteration: AtomicU32::new(0),
@@ -59,12 +61,23 @@ impl<INFO: VisibleInfo> DataForInfoSet<INFO> {
         gamestate_probablity: Probability,
         timestamp: Timestamp,
     ) {
-        let prev_n = self.counterfactual_n.fetch_add(1.0, Ordering::Relaxed);
-        let mut cumulative_counterfactual = self.cumulative_counterfactual.lock();
-        cumulative_counterfactual.reduce(prev_n);
-        // TODO: Does this really make sense in games where different gamestates have different probabilities?
-        cumulative_counterfactual.accumulate(&util, gamestate_probablity);
-        cumulative_counterfactual.reduce(1.0 / (prev_n + 1.0));
+        // FIXME: Clean this up a bit
+
+        // let mut cumulative_counterfactual = self.cumulative_counterfactual.lock();
+        // let prev_n = self.counterfactual_n.fetch_add(1.0, Ordering::Relaxed);
+        // cumulative_counterfactual.reduce(prev_n);
+        // // TODO: Does this really make sense in games where different gamestates have different probabilities?
+        // cumulative_counterfactual.accumulate(&util, gamestate_probablity);
+        // // cumulative_counterfactual.accumulate(&util, 1.0);
+        // cumulative_counterfactual.reduce(1.0 / (prev_n + 1.0));
+
+        // let mut cumulative_counterfactual = self.cumulative_counterfactual.lock();
+        // let _prev_n = self.counterfactual_n.fetch_add(1.0, Ordering::Relaxed);
+        // // cumulative_counterfactual.reduce(prev_n);
+        // // TODO: Does this really make sense in games where different gamestates have different probabilities?
+        // cumulative_counterfactual.accumulate(&util, gamestate_probablity);
+        // // cumulative_counterfactual.accumulate(&util, 1.0);
+        // // cumulative_counterfactual.reduce(1.0 / (prev_n + 1.0));
 
         let mut util = util;
         util.reduce(gamestate_probablity);
@@ -114,11 +127,39 @@ impl<INFO: VisibleInfo> DataForInfoSet<INFO> {
             .map(|x| *x)
     }
 
-    pub(crate) fn get_cumulative_counterfactual(&self) -> UtilityForAllPlayers {
-        *self.cumulative_counterfactual.lock()
-    }
+    // pub(crate) fn get_cumulative_counterfactual(&self) -> UtilityForAllPlayers {
+    //     *self.cumulative_counterfactual.lock()
+    // }
 
     pub(crate) fn is_terminal(&self) -> bool {
         self.terminal_utility.is_some()
+    }
+
+    pub(crate) fn sample_move_deterministic(
+        &self,
+        gamestate: &INFO::Gamestate,
+        timestamp: Timestamp,
+    ) -> INFO::Move {
+        let mut seed_builder = FxHasher::default();
+        Hash::hash(gamestate, &mut seed_builder);
+        Hash::hash(&timestamp, &mut seed_builder);
+
+        let mark = fastrand::Rng::with_seed(seed_builder.finish()).f64();
+
+        let mut cumulative = 0.0;
+
+        let n_moves = self.moves().len();
+
+        for m in &self.move_data {
+            let prob = m.d.load_move_probability(n_moves);
+            cumulative += prob;
+
+            if mark < cumulative {
+                return m.m;
+            }
+        }
+
+        eprintln!("Error with move probabilities {:?}", self.move_data);
+        panic!("Move probabilities did not sum to 1.0!")
     }
 }

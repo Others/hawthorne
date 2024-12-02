@@ -1,24 +1,27 @@
 use crate::cfr::game_model::VisibleInfo;
 use crate::cfr::strategy_generation::workspace_data::data_for_infoset::DataForInfoSet;
+use bumpalo_herd::Member;
 use dashmap::{DashMap, Entry};
 use rustc_hash::FxHasher;
 use std::hash::BuildHasherDefault;
-use std::sync::Arc;
 
-pub(crate) struct DataForKnownInfosets<INFO: VisibleInfo> {
-    infoset_data: DashMap<INFO, Arc<DataForInfoSet<INFO>>, BuildHasherDefault<FxHasher>>,
+pub(crate) struct DataForKnownInfosets<'h, INFO: VisibleInfo> {
+    infoset_data: DashMap<INFO, &'h DataForInfoSet<INFO>, BuildHasherDefault<FxHasher>>,
 }
 
-impl<INFO: VisibleInfo> DataForKnownInfosets<INFO> {
-    pub(crate) fn data_for_infoset(&self, info: INFO) -> Arc<DataForInfoSet<INFO>> {
+impl<'h, INFO: VisibleInfo> DataForKnownInfosets<'h, INFO> {
+    pub(crate) fn data_for_infoset(
+        &self,
+        info: INFO,
+        member: &Member<'h>,
+    ) -> &'h DataForInfoSet<INFO> {
         match self.infoset_data.entry(info) {
-            Entry::Occupied(a) => {
-                Arc::clone(a.get())
-            }
+            Entry::Occupied(a) => a.get(),
             Entry::Vacant(v) => {
-                let data = Arc::new(DataForInfoSet::new(v.key()));
-                v.insert(data.clone());
-                data
+                let h = &*member.alloc_with(|| DataForInfoSet::new(v.key()));
+
+                v.insert(h);
+                h
             }
         }
 
@@ -43,7 +46,7 @@ impl<INFO: VisibleInfo> DataForKnownInfosets<INFO> {
     }
 }
 
-impl<INFO: VisibleInfo> Default for DataForKnownInfosets<INFO> {
+impl<'h, INFO: VisibleInfo> Default for DataForKnownInfosets<'h, INFO> {
     fn default() -> Self {
         Self {
             infoset_data: Default::default(),

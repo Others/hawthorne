@@ -1,8 +1,4 @@
-use static_assertions::const_assert;
-
-pub(crate) const MAX_BATCH_SIZE: usize = 1;
-// If you want to update this assert, you need to also change the size of the bitset in the `DataForInfoset` struct
-const_assert!(MAX_BATCH_SIZE > 0 && MAX_BATCH_SIZE <= 64);
+pub(crate) const MAX_BATCH_SIZE: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Timestamp {

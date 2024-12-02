@@ -1,4 +1,4 @@
-use crate::bridge::card::{Card, Suit, ALL_RANKS, ALL_SUITS};
+use crate::bridge::card::{Card, Rank, Suit, ALL_RANKS, ALL_SUITS};
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, Sub, SubAssign};
 use std::sync::LazyLock;
@@ -16,6 +16,26 @@ pub static FULL_HAND: LazyLock<Hand> = LazyLock::new(|| {
         for r in ALL_RANKS {
             res += Card::new(s, r);
         }
+    }
+
+    res
+});
+
+pub static ACES: LazyLock<Hand> = LazyLock::new(|| {
+    let mut res = Hand::default();
+
+    for s in ALL_SUITS {
+        res += Card::new(s, Rank::Ace);
+    }
+
+    res
+});
+
+pub static TWOS: LazyLock<Hand> = LazyLock::new(|| {
+    let mut res = Hand::default();
+
+    for s in ALL_SUITS {
+        res += Card::new(s, Rank::Two);
     }
 
     res
@@ -80,6 +100,55 @@ impl Hand {
         }
 
         res
+    }
+
+    pub fn reduce(&self, played_cards: Hand) -> Hand {
+        debug_assert!(self.bitset & played_cards.bitset == 0);
+
+        let mut res = self.bitset;
+
+        // Removing a two doesn't allow any up-shifting
+        let mask = (played_cards - *TWOS).bitset >> 1;
+
+        while res & mask != 0 {
+            res += res & mask;
+        }
+
+        debug_assert!(res.count_ones() == self.bitset.count_ones());
+
+        Self { bitset: res }
+    }
+
+    pub fn unreduce(&self, played_cards: Hand) -> Hand {
+        let mut res = self.bitset;
+
+        // Just like how twos can't cause upshifting, we can't downshift a two
+        let mask = (played_cards - *TWOS).bitset;
+        while res & mask != 0 {
+            // Put a 1 every place a card needs to be downshifted
+            let downshift_candidates = res & mask;
+            // Move those 1s down, so we can subtract to move the numbers
+            let subtraction_mask = downshift_candidates >> 1;
+            // Filter out any slot that is occupied
+            let filter_subtraction = subtraction_mask & !res;
+            res -= filter_subtraction;
+        }
+
+        debug_assert!(res.count_ones() == self.bitset.count_ones());
+
+        Self { bitset: res }
+    }
+
+    pub fn first(&self) -> Card {
+        for i in 0u8..52 {
+            let card = Card { n: i };
+
+            if self.contains(card) {
+                return card;
+            }
+        }
+
+        panic!()
     }
 }
 
@@ -178,5 +247,36 @@ impl BitOr<Hand> for Hand {
 impl Default for Hand {
     fn default() -> Self {
         Self { bitset: 0 }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::bridge::card::{Card, Rank, Suit};
+    use crate::bridge::hand::Hand;
+
+    #[test]
+    fn reduce_unreduce_rountrip() {
+        let original = Hand::new(&[
+            Card::new(Suit::Hearts, Rank::King),
+            Card::new(Suit::Diamonds, Rank::Two),
+            Card::new(Suit::Clubs, Rank::Three),
+        ]);
+
+        let reduce_by = Hand::new(&[
+            Card::new(Suit::Hearts, Rank::Ace),
+            Card::new(Suit::Diamonds, Rank::Three),
+            Card::new(Suit::Diamonds, Rank::Four),
+            Card::new(Suit::Diamonds, Rank::Five),
+            Card::new(Suit::Clubs, Rank::Two),
+        ]);
+
+        let reduced = original.reduce(reduce_by);
+        eprintln!("{:?}", reduced.cards());
+
+        let restored = original.unreduce(reduce_by);
+        eprintln!("{:?}", restored.cards());
+
+        assert_eq!(original, restored);
     }
 }
